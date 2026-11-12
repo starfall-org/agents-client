@@ -8,5 +8,8 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<!-- SSH client needs outbound network access in the app sandbox. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>

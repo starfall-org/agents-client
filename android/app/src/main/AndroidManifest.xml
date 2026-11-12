@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Native SSH transport requires outbound network access in release builds. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="agents"
         android:name="${applicationName}"
