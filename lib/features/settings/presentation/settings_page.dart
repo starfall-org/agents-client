@@ -301,6 +301,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
       update(() {
         settings.profiles.removeWhere((p) => p.id == profile.id);
+        settings.lastSessionIds.remove(profile.id);
         if (settings.activeProfileId == profile.id) {
           settings.activeProfileId = null;
         }
@@ -433,16 +434,16 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 780;
     return Scaffold(
-      backgroundColor: AppColors.bg,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(-.7, -.85),
-            radius: 1.4,
-            colors: [Color(0xff1d2630), AppColors.bg],
+      backgroundColor: AppColors.panel,
+      body: SafeArea(
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(-.7, -.85),
+              radius: 1.4,
+              colors: [Color(0xff1d2630), AppColors.bg],
+            ),
           ),
-        ),
-        child: SafeArea(
           child: Center(
             child: Container(
               constraints: const BoxConstraints(maxWidth: 1080),
@@ -1241,7 +1242,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     style: TextStyle(
                         fontSize: 12, color: AppColors.soft, height: 1.5)),
                 const SizedBox(height: 16),
-                const StatusPill('DESIGN PREVIEW  ·  1.0.0+1', AppColors.peach,
+                const StatusPill('DESIGN PREVIEW  ·  1.0.0+2', AppColors.peach,
                     dot: false),
               ],
             ),

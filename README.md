@@ -94,3 +94,20 @@ The host metadata stores header names only; header values (which may contain bea
 The bridge must forward raw SSH byte streams in BINARY WebSocket frames, rather than messages, base64, JSON or a shell. SSH authentication and SSH host-key pinning are still performed by the client and are not replaced by proxy TLS authentication. Avoid exposing an unauthenticated arbitrary SSH TCP gateway.
 
 Local automated tests cover binary byte roundtrips and custom Authorization headers. The feature is not yet tested with a real user-supplied SSH WebSocket gateway.
+
+
+## Conversation-first UX, Android system bars, and safe app resume (2026-11-13)
+
+The conversation view is intentionally compact: a 54px mobile top bar, a short session header (project + agent/host), no repeated sender avatars/timestamps, no fake attachment button or decorative badges, and a single compact text composer. Tool activity is collapsed by default; explicit permission requests remain visible. Long-press a message to copy its contents. Swipe horizontally to Sessions, or use the Sessions action in the top bar.
+
+Both Workspace and Settings use Flutter SafeArea, with the underlying system-bar background matching the dark app panel; Flutter edge-to-edge mode and explicit light status/navigation icons are configured. shadcn_ui sheets already apply their own safe-area insets, so do not double-inset them.
+
+Reopening the app:
+
+- Profile settings, active Profile ID, selected session ID per Profile, host configuration and tmux session metadata persist in non-secret local preferences. Writes are serialized to avoid older snapshots overwriting newer choices. Chat messages and unsent drafts are deliberately NOT stored there.
+- SSH passwords and private keys are stored only in the OS secure vault if the user explicitly chose Remember. OpenCode HTTP passwords and WebSocket header values are likewise separate from ordinary preferences.
+- Native auto-reconnect is limited to the currently selected SSH Profile, requires saved credentials and the Auto reconnect preference, and rejects unknown/changed SSH host keys without an explicit new approval.
+- Resuming from background refreshes server-owned session catalogs and recent provider transcripts, but never automatically sends a prompt, approves a command, starts or resumes a tmux session. Pending SSH handshakes are coalesced and invalidated when the host or app is closed.
+- If the app was killed, the OS closes its local sockets. The remote tmux / provider agent may CONTINUE EXECUTING on the server. Explicitly terminate it when you want the server-side process to stop. If a prompt was in flight when the connection was lost, execution may have occurred without confirmation; inspect the remote session before manually retrying. No automatic prompt retry is implemented.
+- Android uses FLAG_SECURE to prevent OS screenshots, recordings and Recent Apps snapshots of the app. This intentionally also disables user screenshots of the Android app. Flutter overlays its own privacy curtain when backgrounded, including for Settings. Android automatic cloud backup and device-to-device app data migration are disabled to protect encrypted credential material; moving to another phone requires setting up connections again. iOS-specific app-switcher snapshot validation is still pending.
+- Saved provider conversations are reloaded from the actual server when a connection is available. If offline, remote sessions remain disconnected; the UI does not invent saved agent output or auto-trust host keys. A real-host security and interruption test matrix remains needed before declaring production readiness.

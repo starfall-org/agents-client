@@ -147,3 +147,20 @@ Source of truth caveat: the reference serverside-generative agent_list enumerate
 - [x] Confirm 35/35 Flutter tests pass before packaging.
 - [x] Android build environment Gradle cache permissions repaired without modifying application Gradle configuration.
 - [ ] Configure a dedicated production signing key before any production release; current APKs use Flutter template debug signing and must be labeled preview/prerelease.
+
+
+## Safe-area, conversation density, and lifecycle hardening (2026-11-13)
+
+- [x] SafeArea applied to Workspace and Settings content under system-bar panel backgrounds; shadcn_ui bottom sheets already provide their own insets.
+- [x] Android edge-to-edge mode, light navigation/status bar icons and coherent dark system-bar backgrounds, with NavigationBar contrast suppression.
+- [x] Compact conversation header + single-row composer, smaller readable bubbles, no repeated labels/avatars, collapsed activity and no placeholder attachment button; permission approvals remain visible.
+- [x] Global privacy curtain on background/inactive, including Settings; Android FLAG_SECURE prevents recent-app snapshots and screenshots.
+- [x] Android backup/device transfer of application data disabled to avoid exporting encrypted credentials.
+- [x] Persist per-Profile last-selected session ID and selected demo session; no plaintext chat transcripts or drafts stored in preferences.
+- [x] Serialized local settings writes, preserve on-screen transcript on temporary catalog refresh errors.
+- [x] Resume only verified, remembered SSH credentials for the selected Profile; avoid all-host reconnect and no automatic dangerous actions.
+- [x] Pending SSH handshakes are coalesced, canceled/invalidated on disconnect or dispose; sequential sends prevent accidental double-tap.
+- [x] Widget tests for system insets, compact layout, session selection after cold start, background privacy and settings; runtime unit tests for pending SSH handshakes.
+- [ ] Validate startup/reconnect, system bars, and privacy with physical Android devices, real SSH servers and a production WebSocket gateway.
+- [ ] iOS-specific task switcher privacy and secure backup behavior.
+- [ ] Structured native agent event streaming/approvals; avoid claiming tmux output is a structured chat API.

@@ -18,6 +18,9 @@ class SettingsPreferences {
   final List<SshHostDraft> hosts = [];
   final List<AgentProfile> profiles = [];
   String? activeProfileId;
+  // Only a provider/demo session identifier, never conversation content.
+  // Keys are profile IDs or 'demo'.
+  final Map<String, String> lastSessionIds = {};
 
   Map<String, Object?> toJson() => {
         'version': 1,
@@ -33,6 +36,7 @@ class SettingsPreferences {
         'hosts': hosts.map((host) => host.toJson()).toList(),
         'profiles': profiles.map((profile) => profile.toJson()).toList(),
         'activeProfileId': activeProfileId,
+        'lastSessionIds': lastSessionIds,
       };
 
   void loadFromJson(Map<String, dynamic> json) {
@@ -64,6 +68,20 @@ class SettingsPreferences {
             profiles.any((profile) => profile.id == json['activeProfileId'])
         ? json['activeProfileId'] as String
         : null;
+    lastSessionIds.clear();
+    final restoredIds = json['lastSessionIds'];
+    if (restoredIds is Map) {
+      for (final entry in restoredIds.entries.take(64)) {
+        if (entry.key is String &&
+            entry.value is String &&
+            (entry.key as String).length <= 128 &&
+            (entry.value as String).length <= 256 &&
+            ((entry.key as String) == 'demo' ||
+                profiles.any((profile) => profile.id == entry.key))) {
+          lastSessionIds[entry.key as String] = entry.value as String;
+        }
+      }
+    }
     hosts.clear();
     for (final item in (json['hosts'] as List<dynamic>? ?? [])) {
       if (item is Map) {

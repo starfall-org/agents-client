@@ -17,12 +17,28 @@ class RemoteCapabilities {
   final Map<Agent, bool> agents;
 }
 
-/// Keeps a single SSH connection per host. Closing a PTY detaches from tmux
-/// while the remote coding agent process continues to run.
+typedef SshConnectionFactory = Future<SshConnection> Function(
+  SshHostDraft host,
+  SshCredentials credentials, {
+  required TrustOnFirstUse trustFirstKey,
+});
+
+/// Keeps a single SSH connection per host. Pending handshakes are tracked so
+/// closing the app or removing a host cannot later install a stray socket.
+/// Closing a PTY detaches from tmux while the remote agent keeps running.
 class RemoteRuntime extends ChangeNotifier {
-  RemoteRuntime({TmuxService tmux = const TmuxService()}) : _tmux = tmux;
+  RemoteRuntime({
+    TmuxService tmux = const TmuxService(),
+    SshConnectionFactory? connector,
+  })  : _tmux = tmux,
+        _connector = connector ?? SshConnection.connect;
+
   final TmuxService _tmux;
+  final SshConnectionFactory _connector;
   final Map<String, SshConnection> _connections = {};
+  final Map<String, Future<void>> _pending = {};
+  final Map<String, int> _epochs = {};
+  bool _disposed = false;
   void Function(String hostId)? onConnectionLost;
 
   bool isConnected(String hostId) => _connections[hostId]?.connected ?? false;
@@ -42,18 +58,48 @@ class RemoteRuntime extends ChangeNotifier {
     SshHostDraft host,
     SshCredentials credentials, {
     required TrustOnFirstUse approveHostKey,
-  }) async {
-    if (isConnected(host.id)) return;
-    final client = await SshConnection.connect(
+  }) {
+    if (_disposed) return Future.error(StateError('SSH runtime is closed'));
+    if (isConnected(host.id)) return Future<void>.value();
+    final inFlight = _pending[host.id];
+    if (inFlight != null) return inFlight;
+
+    final epoch = _epochs[host.id] ?? 0;
+    final task = _connectOnce(host, credentials, approveHostKey, epoch);
+    _pending[host.id] = task;
+    // Listen to both outcomes to clean up without an unhandled async error.
+    unawaited(task.then<void>(
+      (_) {
+        if (identical(_pending[host.id], task)) _pending.remove(host.id);
+      },
+      onError: (Object _, StackTrace __) {
+        if (identical(_pending[host.id], task)) _pending.remove(host.id);
+      },
+    ));
+    return task;
+  }
+
+  Future<void> _connectOnce(
+    SshHostDraft host,
+    SshCredentials credentials,
+    TrustOnFirstUse approveHostKey,
+    int epoch,
+  ) async {
+    final client = await _connector(
       host,
       credentials,
       trustFirstKey: approveHostKey,
     );
+    if (_disposed || (_epochs[host.id] ?? 0) != epoch) {
+      await client.disconnect();
+      throw StateError('SSH connection was canceled');
+    }
     final previous = _connections[host.id];
     _connections[host.id] = client;
     notifyListeners();
+
     void handleClosed() {
-      if (!identical(_connections[host.id], client)) return;
+      if (_disposed || !identical(_connections[host.id], client)) return;
       _connections.remove(host.id);
       notifyListeners();
       onConnectionLost?.call(host.id);
@@ -61,7 +107,7 @@ class RemoteRuntime extends ChangeNotifier {
 
     unawaited(client.done.then(
       (_) => handleClosed(),
-      onError: (Object error, StackTrace trace) => handleClosed(),
+      onError: (Object _, StackTrace __) => handleClosed(),
     ));
     if (previous != null) unawaited(previous.disconnect());
   }
@@ -202,6 +248,10 @@ class RemoteRuntime extends ChangeNotifier {
   }
 
   Future<void> disconnect(String hostId) async {
+    if (_disposed) return;
+    // Invalidate in-flight handshakes as well as established sockets.
+    _epochs[hostId] = (_epochs[hostId] ?? 0) + 1;
+    _pending.remove(hostId);
     final old = _connections.remove(hostId);
     notifyListeners();
     await old?.disconnect();
@@ -209,6 +259,12 @@ class RemoteRuntime extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    onConnectionLost = null;
+    for (final hostId in _pending.keys) {
+      _epochs[hostId] = (_epochs[hostId] ?? 0) + 1;
+    }
+    _pending.clear();
     for (final ssh in _connections.values) {
       unawaited(ssh.disconnect());
     }

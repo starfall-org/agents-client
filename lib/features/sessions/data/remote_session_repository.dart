@@ -51,7 +51,7 @@ class RemoteSessionRepository {
 
   Future<void> save(Iterable<AgentSession> sessions) async {
     final data = sessions
-        .where((s) => s.isSshRemote)
+        .where((s) => s.isSshRemote && s.tmuxName != null)
         .map((session) => {
               'id': session.id,
               'project': session.project,

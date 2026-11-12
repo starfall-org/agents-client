@@ -41,9 +41,9 @@ void main() {
         hostId: 'host-1',
         agent: Agent.claude));
     prefs.activeProfileId = 'profile-1';
-    await const SettingsRepository().save(prefs);
+    await SettingsRepository().save(prefs);
     final restored = SettingsPreferences();
-    await const SettingsRepository().loadInto(restored);
+    await SettingsRepository().loadInto(restored);
     expect(restored.defaultDirectory, '~/work');
     expect(restored.showActivity, false);
     expect(restored.hosts.single.hostname, '127.0.0.1');

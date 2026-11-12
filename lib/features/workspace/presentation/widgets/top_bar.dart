@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../../../app/theme/app_colors.dart';
-import '../../../../shared/widgets/status_elements.dart';
 
 class TopBar extends StatelessWidget {
   const TopBar(
@@ -18,7 +17,7 @@ class TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        height: wide ? 74 : 65,
+        height: wide ? 62 : 54,
         padding: EdgeInsets.symmetric(horizontal: wide ? 30 : 19),
         decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: AppColors.border))),
@@ -28,14 +27,14 @@ class TopBar extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             child: Row(children: [
               Container(
-                width: 35,
-                height: 35,
+                width: 31,
+                height: 31,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                     color: AppColors.peach,
                     borderRadius: BorderRadius.circular(11)),
                 child: const Icon(Icons.hub_rounded,
-                    color: AppColors.bg, size: 21),
+                    color: AppColors.bg, size: 19),
               ),
               const SizedBox(width: 11),
               Column(
@@ -45,24 +44,14 @@ class TopBar extends StatelessWidget {
                     const Text('agents',
                         style: TextStyle(
                             color: AppColors.text,
-                            fontSize: 20,
+                            fontSize: 18,
                             fontWeight: FontWeight.w900,
                             letterSpacing: -.8,
                             height: 1)),
-                    if (wide) ...[
-                      const SizedBox(height: 5),
-                      const SmallLabel('REMOTE CODING WORKSPACE'),
-                    ],
                   ]),
             ]),
           ),
           const Spacer(),
-          if (wide) ...[
-            const StatusPill('UI PREVIEW', AppColors.muted, dot: false),
-            const SizedBox(width: 18),
-            Container(width: 1, height: 24, color: AppColors.border),
-            const SizedBox(width: 16),
-          ],
           ShadIconButton.ghost(
             width: 34,
             height: 34,

@@ -29,7 +29,7 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> {
+class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   final List<AgentSession> sessions = examples();
   final SettingsPreferences preferences = SettingsPreferences();
   final RemoteRuntime runtime = RemoteRuntime();
@@ -39,6 +39,82 @@ class _WorkspaceState extends State<Workspace> {
   String? _profileError;
   int _loadRevision = 0;
   int _transcriptRevision = 0;
+  bool _isForeground = true;
+  bool _restoring = true;
+  bool _resuming = false;
+  bool _foregroundRefreshPending = false;
+  bool _sending = false;
+
+  Iterable<SshHostDraft> get _autoReconnectHosts {
+    // Reopen only the SSH host of the selected profile. Do not silently
+    // initiate connections to every unrelated saved machine.
+    final profile = activeProfile;
+    if (profile == null || profile.usesHttp) return const [];
+    return preferences.hosts.where((host) => host.id == profile.hostId);
+  }
+
+  void _rememberSelection(AgentSession session) {
+    final bucket = activeProfile?.id ?? 'demo';
+    preferences.lastSessionIds[bucket] = session.id;
+    unawaited(_saveSettings().catchError((Object _) {}));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final foreground = state == AppLifecycleState.resumed;
+    if (_isForeground == foreground) return;
+    _isForeground = foreground;
+    if (!foreground && !_restoring) {
+      unawaited(_saveSettings().catchError((Object _) {}));
+    }
+    // Never send prompts, approve commands, or auto-attach tmux on resume.
+    if (foreground) {
+      if (_restoring || _resuming) {
+        _foregroundRefreshPending = true;
+      } else {
+        unawaited(_onForeground());
+      }
+    }
+  }
+
+  Future<void> _onForeground() async {
+    if (_resuming || !_isForeground || !mounted) return;
+    _resuming = true;
+    try {
+      if (preferences.autoReconnect && !kIsWeb) {
+        for (final host in _autoReconnectHosts) {
+          if (!mounted || !_isForeground) return;
+          if (runtime.isConnected(host.id)) continue;
+          try {
+            final credentials = await const SshCredentialStore().read(host.id);
+            if (credentials == null || !mounted || !_isForeground) continue;
+            await runtime.connect(
+              host,
+              credentials,
+              // An unknown/changed host key is never silently trusted.
+              approveHostKey: (_, __, ___) async => false,
+            );
+          } catch (_) {
+            // No authentication prompts or retry loops in the background.
+          }
+        }
+      }
+      if (!mounted || !_isForeground) return;
+      if (activeProfile != null) {
+        await loadProfileSessions(); // Only read-only catalog/history refresh.
+      } else {
+        await refreshRemoteSessions(silent: true);
+      }
+    } catch (_) {
+      // Storage/network errors leave the previous session visible, not replayed.
+    } finally {
+      _resuming = false;
+      if (_foregroundRefreshPending && _isForeground && mounted) {
+        _foregroundRefreshPending = false;
+        unawaited(_onForeground());
+      }
+    }
+  }
 
   AgentProfile? get activeProfile {
     for (final profile in preferences.profiles) {
@@ -68,21 +144,24 @@ class _WorkspaceState extends State<Workspace> {
   List<AgentSession> get visibleSessions =>
       activeProfile == null ? sessions : _profileSessions;
 
-  final SettingsRepository settingsRepository = const SettingsRepository();
+  final SettingsRepository settingsRepository = SettingsRepository();
   final RemoteSessionRepository sessionRepository =
       const RemoteSessionRepository();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     runtime.addListener(_runtimeChanged);
     runtime.onConnectionLost = (hostId) {
-      for (final session
-          in sessions.where((item) => item.remoteHostId == hostId)) {
+      for (final session in [
+        ...sessions,
+        ..._profileSessions,
+      ].where((item) => item.remoteHostId == hostId)) {
         session.state = WorkState.disconnected;
       }
       if (mounted) setState(() {});
-      if (preferences.autoReconnect && !kIsWeb) {
+      if (preferences.autoReconnect && !kIsWeb && _isForeground) {
         unawaited(_reconnect(hostId, 0));
       }
     };
@@ -100,15 +179,26 @@ class _WorkspaceState extends State<Workspace> {
       if (!mounted) return;
       setState(() {
         sessions.insertAll(0, stored);
-        if (stored.isNotEmpty) active = 0;
+        final restoredId = preferences.lastSessionIds['demo'];
+        if (restoredId != null) {
+          final match =
+              sessions.indexWhere((session) => session.id == restoredId);
+          if (match >= 0) {
+            active = match;
+          } else if (stored.isNotEmpty) {
+            active = 0;
+          }
+        } else if (stored.isNotEmpty) {
+          active = 0;
+        }
       });
       // Only reconnect automatically using credentials that the user
       // explicitly chose to save in the native OS secure vault.
-      if (!kIsWeb && preferences.autoReconnect) {
-        for (final host in preferences.hosts) {
+      if (!kIsWeb && preferences.autoReconnect && _isForeground) {
+        for (final host in _autoReconnectHosts) {
           try {
             final credentials = await const SshCredentialStore().read(host.id);
-            if (credentials == null || !mounted) continue;
+            if (credentials == null || !mounted || !_isForeground) continue;
             await runtime.connect(
               host,
               credentials,
@@ -119,23 +209,34 @@ class _WorkspaceState extends State<Workspace> {
             // No automatic trust override. Host remains disconnected.
           }
         }
-        if (mounted) await refreshRemoteSessions(silent: true);
+        if (mounted && _isForeground) {
+          await refreshRemoteSessions(silent: true);
+        }
       }
-      if (mounted && activeProfile != null) await loadProfileSessions();
+      if (mounted && _isForeground && activeProfile != null) {
+        await loadProfileSessions();
+      }
     } catch (_) {
-      // UI demo remains usable if local persistence is unavailable.
+      // Invalid/unreadable local storage never becomes a trusted SSH host.
+    } finally {
+      _restoring = false;
+      if (_foregroundRefreshPending && _isForeground && mounted) {
+        _foregroundRefreshPending = false;
+        unawaited(_onForeground());
+      }
     }
   }
 
   Future<void> _reconnect(String hostId, int attempt) async {
-    if (attempt > 2 || !mounted || !preferences.autoReconnect) return;
+    if (attempt > 2 || !mounted || !_isForeground || !preferences.autoReconnect)
+      return;
     await Future<void>.delayed(Duration(seconds: 2 << attempt));
-    if (!mounted || runtime.isConnected(hostId)) return;
+    if (!mounted || !_isForeground || runtime.isConnected(hostId)) return;
     final hosts = preferences.hosts.where((h) => h.id == hostId);
     if (hosts.isEmpty) return;
     try {
       final credentials = await const SshCredentialStore().read(hostId);
-      if (credentials == null || !mounted) return;
+      if (credentials == null || !mounted || !_isForeground) return;
       await runtime.connect(
         hosts.first,
         credentials,
@@ -164,6 +265,8 @@ class _WorkspaceState extends State<Workspace> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    runtime.onConnectionLost = null;
     runtime.removeListener(_runtimeChanged);
     runtime.dispose();
     pages.dispose();
@@ -187,6 +290,7 @@ class _WorkspaceState extends State<Workspace> {
       }
     });
     composer.clear();
+    _rememberSelection(session);
     go(0);
     if (session.providerSessionId != null) {
       unawaited(_loadTranscript(session));
@@ -243,7 +347,17 @@ class _WorkspaceState extends State<Workspace> {
       searchQuery = '';
       filter = 'All';
     });
-    unawaited(_saveSettings());
+    try {
+      await _saveSettings();
+    } catch (error) {
+      if (mounted) {
+        ShadSonner.of(context).show(ShadToast(
+          title: const Text('Profile choice could not be saved'),
+          description: Text(error.toString()),
+        ));
+      }
+    }
+    if (!mounted) return;
     go(1);
     await loadProfileSessions();
   }
@@ -252,11 +366,12 @@ class _WorkspaceState extends State<Workspace> {
     final profile = activeProfile;
     if (profile == null) return;
     final revision = ++_loadRevision;
+    final previousSelection = _profileSelectedSession;
     setState(() {
       _profileLoading = true;
       _profileError = null;
-      _profileSessions.clear();
-      _profileSelectedSession = null;
+      // Keep the current messages on screen while checking the network.
+      // A refresh failure must not destroy the in-memory conversation.
     });
     try {
       final List<AgentSession> loaded;
@@ -273,9 +388,10 @@ class _WorkspaceState extends State<Workspace> {
           );
         }
         final host = matching.first;
-        if (kIsWeb) {
+        if (kIsWeb && !host.usesWebSocket) {
           throw StateError(
-            'Web cannot connect to raw SSH. Use the native app or a secure gateway.',
+            'Browsers require a WebSocket proxy for SSH. '
+            'Edit the host under Settings → Connections.',
           );
         }
         if (!runtime.isConnected(host.id)) {
@@ -286,11 +402,31 @@ class _WorkspaceState extends State<Workspace> {
         loaded = await runtime.listProviderSessions(host, profile.agent);
       }
       if (!mounted || revision != _loadRevision) return;
+      AgentSession? restored;
+      // A freshly listed record can reuse already displayed text. This is a
+      // presentation-only cache; chat contents are never saved to preferences.
+      for (final item in loaded) {
+        if (item.id == previousSelection?.id) {
+          item.lines = previousSelection!.lines;
+        }
+      }
+      final lastId = preferences.lastSessionIds[profile.id];
+      if (lastId != null) {
+        for (final item in loaded) {
+          if (item.id == lastId) {
+            restored = item;
+            break;
+          }
+        }
+      }
+      restored ??= loaded.isNotEmpty ? loaded.first : null;
       setState(() {
-        _profileSessions.addAll(loaded);
-        if (loaded.isNotEmpty) _profileSelectedSession = loaded.first;
+        _profileSessions
+          ..clear()
+          ..addAll(loaded);
+        _profileSelectedSession = restored;
       });
-      if (loaded.isNotEmpty) unawaited(_loadTranscript(loaded.first));
+      if (restored != null) unawaited(_loadTranscript(restored));
     } catch (error) {
       if (!mounted || revision != _loadRevision) return;
       setState(() => _profileError = error.toString());
@@ -302,8 +438,18 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   Future<void> send() async {
+    if (!_isForeground || _sending) return;
     final message = composer.text.trim();
     if (message.isEmpty) return;
+    setState(() => _sending = true);
+    try {
+      await _sendMessage(message);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _sendMessage(String message) async {
     final target = selected;
     if (activeProfile != null && _profileSelectedSession == null) {
       ShadSonner.of(context).show(const ShadToast(
@@ -322,7 +468,7 @@ class _WorkspaceState extends State<Workspace> {
           message,
           password: await const OpenCodePasswordStore().read(profile.id),
         );
-        if (!mounted) return;
+        if (!mounted || selected.id != target.id) return;
         setState(() {
           target.lines.add(ChatLine(message, true, 'Now'));
           target.summary = 'Prompt sent over OpenCode HTTP';
@@ -336,8 +482,9 @@ class _WorkspaceState extends State<Workspace> {
       } catch (error) {
         if (mounted) {
           ShadSonner.of(context).show(ShadToast(
-            title: const Text('OpenCode HTTP request failed'),
-            description: Text(error.toString()),
+            title: const Text('OpenCode delivery not confirmed'),
+            description: Text(error.toString() +
+                '. Check the server conversation before retrying.'),
           ));
         }
       }
@@ -346,7 +493,7 @@ class _WorkspaceState extends State<Workspace> {
     if (target.isSshRemote) {
       try {
         await runtime.sendPrompt(target, message);
-        if (!mounted) return;
+        if (!mounted || selected.id != target.id) return;
         setState(() {
           target.lines.add(ChatLine(message, true, 'Now'));
           target.summary = 'Sent to tmux · see Terminal for output';
@@ -361,8 +508,9 @@ class _WorkspaceState extends State<Workspace> {
       } catch (error) {
         if (!mounted) return;
         ShadSonner.of(context).show(ShadToast(
-          title: const Text('Could not send prompt'),
-          description: Text(error.toString()),
+          title: const Text('SSH delivery not confirmed'),
+          description: Text(error.toString() +
+              '. Check the remote terminal before retrying.'),
         ));
       }
       return;
@@ -601,7 +749,7 @@ class _WorkspaceState extends State<Workspace> {
     }
     if (!mounted) return;
     setState(() {});
-    unawaited(_saveSessions());
+    unawaited(_saveSessions().catchError((Object _) {}));
     if (!silent) {
       ShadSonner.of(context).show(ShadToast(
         title: const Text('Sessions refreshed'),
@@ -640,7 +788,7 @@ class _WorkspaceState extends State<Workspace> {
         target.state = WorkState.done;
         target.summary = 'Remote tmux session terminated';
       });
-      unawaited(_saveSessions());
+      unawaited(_saveSessions().catchError((Object _) {}));
       ShadSonner.of(context).show(const ShadToast(
         title: Text('Remote session terminated'),
       ));
@@ -699,86 +847,89 @@ class _WorkspaceState extends State<Workspace> {
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 800;
     return Scaffold(
-        body: Container(
-      decoration: const BoxDecoration(
-          gradient: RadialGradient(
-        center: Alignment(-.7, -.85),
-        radius: 1.4,
-        colors: [Color(0xff1d2630), AppColors.bg],
-      )),
-      child: SafeArea(
-          child: Center(
-              child: Container(
-        constraints: const BoxConstraints(maxWidth: 1080),
-        margin: EdgeInsets.symmetric(
-            horizontal: wide ? 24 : 0, vertical: wide ? 22 : 0),
-        decoration: BoxDecoration(
-          color: AppColors.panel,
-          borderRadius: BorderRadius.circular(wide ? 24 : 0),
-          border: wide ? Border.all(color: AppColors.border) : null,
-          boxShadow: wide
-              ? [
-                  BoxShadow(
-                      color: Colors.black.withValues(alpha: .25),
-                      blurRadius: 45,
-                      offset: const Offset(0, 17))
-                ]
-              : null,
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(children: [
-          TopBar(
-              page: currentPage,
-              count: visibleSessions.length,
-              wide: wide,
-              chat: () => go(0),
-              listing: () => go(1),
-              onSettings: openSettings),
-          Expanded(
-              child: PageView(
-            controller: pages,
-            onPageChanged: (i) => setState(() => currentPage = i),
-            children: [
-              ConversationView(
-                key: ValueKey(selected.id),
-                session: selected,
-                input: composer,
-                wide: wide,
-                onSend: send,
-                onTerminal: showTerminal,
-                onChanges: showChanges,
-                onFiles: showFiles,
-                onTerminate: terminateSelected,
-                onSessions: () => go(1),
-                onApprove: () => approval(true),
-                onDeny: () => approval(false),
-                showActivity: preferences.showActivity,
-                compactMessages: preferences.compactMessages,
-                showCommandPreview: preferences.showCommandPreview,
-              ),
-              SessionList(
-                sessions: visibleSessions,
-                activeId: selected.id,
-                profileLabel: activeProfile?.name ?? 'Demo (no profile)',
-                profileLoading: _profileLoading,
-                profileError: _profileError,
-                onProfilePicker: chooseProfile,
-                filter: filter,
-                searchQuery: searchQuery,
-                onSearch: (value) => setState(() => searchQuery = value),
-                wide: wide,
-                onFilter: (x) => setState(() => filter = x),
-                onSelect: select,
-                onNew: newSession,
-                onBack: () => go(0),
-                onRefresh: () => activeProfile == null
-                    ? refreshRemoteSessions()
-                    : loadProfileSessions(),
-              ),
-            ],
-          )),
-        ]),
-      ))),
-    ));
+        backgroundColor: AppColors.panel,
+        body: SafeArea(
+          child: Container(
+              decoration: const BoxDecoration(
+                  gradient: RadialGradient(
+                center: Alignment(-.7, -.85),
+                radius: 1.4,
+                colors: [Color(0xff1d2630), AppColors.bg],
+              )),
+              child: Center(
+                  child: Container(
+                constraints: const BoxConstraints(maxWidth: 1080),
+                margin: EdgeInsets.symmetric(
+                    horizontal: wide ? 24 : 0, vertical: wide ? 22 : 0),
+                decoration: BoxDecoration(
+                  color: AppColors.panel,
+                  borderRadius: BorderRadius.circular(wide ? 24 : 0),
+                  border: wide ? Border.all(color: AppColors.border) : null,
+                  boxShadow: wide
+                      ? [
+                          BoxShadow(
+                              color: Colors.black.withValues(alpha: .25),
+                              blurRadius: 45,
+                              offset: const Offset(0, 17))
+                        ]
+                      : null,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Column(children: [
+                  TopBar(
+                      page: currentPage,
+                      count: visibleSessions.length,
+                      wide: wide,
+                      chat: () => go(0),
+                      listing: () => go(1),
+                      onSettings: openSettings),
+                  Expanded(
+                      child: PageView(
+                    controller: pages,
+                    onPageChanged: (i) => setState(() => currentPage = i),
+                    children: [
+                      ConversationView(
+                        key: ValueKey(selected.id),
+                        session: selected,
+                        input: composer,
+                        wide: wide,
+                        onSend: send,
+                        onTerminal: showTerminal,
+                        onChanges: showChanges,
+                        onFiles: showFiles,
+                        onTerminate: terminateSelected,
+                        onApprove: () => approval(true),
+                        onDeny: () => approval(false),
+                        showActivity: preferences.showActivity,
+                        compactMessages: preferences.compactMessages,
+                        showCommandPreview: preferences.showCommandPreview,
+                        sending: _sending,
+                      ),
+                      SessionList(
+                        sessions: visibleSessions,
+                        activeId: selected.id,
+                        profileLabel:
+                            activeProfile?.name ?? 'Demo (no profile)',
+                        profileLoading: _profileLoading,
+                        profileError: _profileError,
+                        onProfilePicker: chooseProfile,
+                        filter: filter,
+                        searchQuery: searchQuery,
+                        onSearch: (value) =>
+                            setState(() => searchQuery = value),
+                        wide: wide,
+                        onFilter: (x) => setState(() => filter = x),
+                        onSelect: select,
+                        onNew: newSession,
+                        onBack: () => go(0),
+                        onRefresh: () => activeProfile == null
+                            ? refreshRemoteSessions()
+                            : loadProfileSessions(),
+                      ),
+                    ],
+                  )),
+                ]),
+              ))),
+        ));
   }
 }

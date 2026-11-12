@@ -3,8 +3,6 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../sessions/models/agent_session.dart';
 import '../../sessions/presentation/agent_visuals.dart';
-import '../../sessions/presentation/widgets/agent_icon.dart';
-import '../../../shared/widgets/status_elements.dart';
 import 'widgets/message_bubbles.dart';
 import 'widgets/activity_card.dart';
 import 'widgets/approval_card.dart';
@@ -21,12 +19,12 @@ class ConversationView extends StatefulWidget {
       required this.onChanges,
       required this.onFiles,
       required this.onTerminate,
-      required this.onSessions,
       required this.onApprove,
       required this.onDeny,
       this.showActivity = true,
       this.compactMessages = false,
-      this.showCommandPreview = true});
+      this.showCommandPreview = true,
+      this.sending = false});
   final AgentSession session;
   final TextEditingController input;
   final bool wide;
@@ -35,10 +33,9 @@ class ConversationView extends StatefulWidget {
       onChanges,
       onFiles,
       onTerminate,
-      onSessions,
       onApprove,
       onDeny;
-  final bool showActivity, compactMessages, showCommandPreview;
+  final bool showActivity, compactMessages, showCommandPreview, sending;
   @override
   State<ConversationView> createState() => _ConversationViewState();
 }
@@ -46,6 +43,31 @@ class ConversationView extends StatefulWidget {
 class _ConversationViewState extends State<ConversationView> {
   bool expanded = false;
   final ScrollController scroll = ScrollController();
+  late int _lastMessageCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastMessageCount = widget.session.lines.length;
+  }
+
+  @override
+  void didUpdateWidget(covariant ConversationView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.session.lines.length != _lastMessageCount ||
+        widget.session.id != oldWidget.session.id) {
+      _lastMessageCount = widget.session.lines.length;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !scroll.hasClients) return;
+        scroll.animateTo(
+          scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        );
+      });
+    }
+  }
+
   @override
   void dispose() {
     scroll.dispose();
@@ -123,152 +145,135 @@ class _ConversationViewState extends State<ConversationView> {
     final s = widget.session;
     return Column(children: [
       Container(
-        padding: EdgeInsets.fromLTRB(widget.wide ? 36 : 19,
-            widget.wide ? 23 : 20, widget.wide ? 35 : 12, 20),
+        padding: EdgeInsets.symmetric(
+          horizontal: widget.wide ? 28 : 15,
+          vertical: widget.wide ? 13 : 10,
+        ),
         decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: AppColors.border))),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          AgentIcon(s.agent, size: widget.wide ? 48 : 43),
-          const SizedBox(width: 13),
+          border: Border(bottom: BorderSide(color: AppColors.border)),
+        ),
+        child: Row(children: [
           Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.project,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppColors.text,
+                    fontSize: widget.wide ? 18 : 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
                 Row(children: [
-                  Flexible(
-                      child: Text(s.project,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              color: AppColors.text,
-                              fontSize: widget.wide ? 22 : 18,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -.6))),
-                  if (widget.wide) ...[
-                    const SizedBox(width: 11),
-                    StatusPill(s.state.title, s.state.tone),
-                  ],
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: s.state.tone,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      s.agent.title + ' · ' + s.host,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.soft,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
                 ]),
-                const SizedBox(height: 6),
-                Text(s.agent.title + '  ·  ' + s.host,
-                    style:
-                        const TextStyle(color: AppColors.soft, fontSize: 12)),
-                const SizedBox(height: 6),
-                Text(s.path,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: AppColors.muted,
-                        fontFamily: 'monospace',
-                        fontSize: 11)),
-                if (!widget.wide) ...[
-                  const SizedBox(height: 10),
-                  StatusPill(s.state.title, s.state.tone)
-                ],
-              ])),
-          ShadIconButton.ghost(
+              ],
+            ),
+          ),
+          if (!s.isHttpRemote)
+            ShadIconButton.ghost(
               width: 36,
               height: 36,
               padding: EdgeInsets.zero,
               onPressed: widget.onTerminal,
               icon: const Icon(Icons.terminal_rounded,
-                  size: 22, color: AppColors.soft)),
-          if (widget.wide)
-            ShadIconButton.ghost(
-                width: 34,
-                height: 36,
-                padding: EdgeInsets.zero,
-                onPressed: widget.onFiles,
-                icon: const Icon(Icons.folder_open_outlined,
-                    size: 20, color: AppColors.soft)),
-          if (widget.wide)
-            ShadIconButton.ghost(
-                width: 34,
-                height: 36,
-                padding: EdgeInsets.zero,
-                onPressed: widget.onChanges,
-                icon: const Icon(Icons.difference_outlined,
-                    size: 20, color: AppColors.soft)),
+                  size: 21, color: AppColors.soft),
+            ),
           ShadIconButton.ghost(
-              width: 36,
-              height: 36,
-              padding: EdgeInsets.zero,
-              onPressed: showDetails,
-              icon: const Icon(Icons.more_horiz_rounded,
-                  size: 22, color: AppColors.soft)),
+            width: 36,
+            height: 36,
+            padding: EdgeInsets.zero,
+            onPressed: showDetails,
+            icon: const Icon(Icons.more_horiz_rounded,
+                size: 22, color: AppColors.soft),
+          ),
         ]),
       ),
       Expanded(
-          child: ListView(
-        controller: scroll,
-        padding: EdgeInsets.fromLTRB(
-            widget.wide ? 40 : 17, 25, widget.wide ? 40 : 17, 24),
-        children: [
-          if (s.isRemote)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 18),
-              child: Text(
-                'SSH / tmux · terminal output is the source of truth. '
-                'Chat messages sent here are typed into the remote CLI.',
-                style: TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 11,
-                  height: 1.5,
-                ),
-              ),
-            )
-          else
-            const Center(child: SmallLabel('TODAY  ·  10:42 AM')),
-          const SizedBox(height: 27),
-          if (s.lines.isEmpty)
-            const EmptyChat()
-          else
-            ...s.lines.map((line) => Padding(
-                  padding:
-                      EdgeInsets.only(bottom: widget.compactMessages ? 13 : 26),
+        child: ListView(
+          controller: scroll,
+          padding: EdgeInsets.fromLTRB(
+            widget.wide ? 30 : 14,
+            16,
+            widget.wide ? 30 : 14,
+            16,
+          ),
+          children: [
+            if (s.lines.isEmpty)
+              const EmptyChat()
+            else
+              ...s.lines.map(
+                (line) => Padding(
+                  padding: EdgeInsets.only(
+                    bottom: widget.compactMessages ? 10 : 17,
+                  ),
                   child: line.byUser
                       ? UserBubble(line)
                       : AgentBubble(line, s.agent),
-                )),
-          if (s.showActivity) ...[
-            if (widget.showActivity) ...[
-              Padding(
-                padding: const EdgeInsets.only(left: 41),
-                child: ActivityCard(
-                  expanded: expanded,
-                  onToggle: () => setState(() => expanded = !expanded),
                 ),
               ),
-              const SizedBox(height: 20),
-            ],
-            Padding(
-              padding: const EdgeInsets.only(left: 41),
-              child: s.resolved
+            if (s.showActivity) ...[
+              if (widget.showActivity) ...[
+                ShadButton.ghost(
+                  size: ShadButtonSize.sm,
+                  onPressed: () => setState(() => expanded = !expanded),
+                  leading: const Icon(Icons.terminal_outlined,
+                      size: 15, color: AppColors.muted),
+                  child: Text(
+                      expanded ? 'Hide tool activity' : 'View tool activity',
+                      style:
+                          const TextStyle(color: AppColors.soft, fontSize: 11)),
+                ),
+                if (expanded) ...[
+                  const SizedBox(height: 8),
+                  ActivityCard(
+                    expanded: true,
+                    onToggle: () => setState(() => expanded = false),
+                  ),
+                ],
+              ],
+              const SizedBox(height: 10),
+              s.resolved
                   ? const ResolvedCard()
                   : ApprovalCard(
                       onApprove: widget.onApprove,
                       onDeny: widget.onDeny,
                       showCommand: widget.showCommandPreview,
                     ),
-            ),
-            const SizedBox(height: 15),
+            ],
           ],
-        ],
-      )),
+        ),
+      ),
       ComposerBox(
         input: widget.input,
         wide: widget.wide,
         agent: s.agent,
-        onSend: () {
-          widget.onSend();
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (scroll.hasClients) {
-              scroll.animateTo(scroll.position.maxScrollExtent,
-                  duration: const Duration(milliseconds: 280),
-                  curve: Curves.easeOut);
-            }
-          });
-        },
-        onSessions: widget.onSessions,
+        sending: widget.sending,
+        enabled: !s.id.startsWith('empty-'),
+        onSend: widget.onSend,
       ),
     ]);
   }
