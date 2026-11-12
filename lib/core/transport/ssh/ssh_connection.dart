@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 import '../../../features/settings/models/settings_preferences.dart';
 import '../../security/host_key_store.dart';
 import '../../security/ssh_credential_store.dart';
+import '../../security/ssh_websocket_header_store.dart';
+import 'websocket_ssh_socket.dart';
 import '../remote_executor.dart';
 
 /// A live interactive PTY bound to one SSH session.
@@ -23,8 +25,8 @@ class SshTerminalChannel implements RemoteTerminalChannel {
   void close() => _session.close();
 }
 
-/// Direct TCP SSH: Android, iOS, Windows, macOS and Linux.
-/// Web requires a separately authenticated SSH-to-WebSocket gateway.
+/// SSH over native TCP or an explicit raw-binary WebSocket gateway.
+/// Browser connections require a WebSocket gateway; no direct TCP is attempted.
 class SshConnection implements RemoteExecutor {
   SshConnection._(this.host, this._client);
   final SshHostDraft host;
@@ -38,10 +40,10 @@ class SshConnection implements RemoteExecutor {
     required TrustOnFirstUse trustFirstKey,
     SshHostKeyStore keyStore = const SshHostKeyStore(),
   }) async {
-    if (kIsWeb) {
+    if (kIsWeb && !host.usesWebSocket) {
       throw UnsupportedError(
-        'Browsers cannot open direct SSH sockets. Use the native app or '
-        'a trusted SSH-to-WebSocket gateway.',
+        'Browsers cannot open direct SSH sockets. '
+        'Select WebSocket proxy on the SSH host.',
       );
     }
     if (!credentials.isValid) {
@@ -53,11 +55,40 @@ class SshConnection implements RemoteExecutor {
             credentials.keyPassphrase,
           )
         : <SSHKeyPair>[];
-    final socket = await SSHSocket.connect(
-      host.hostname,
-      host.port,
-      timeout: const Duration(seconds: 12),
-    );
+    final SSHSocket socket;
+    if (host.usesWebSocket) {
+      final url = host.websocketUrl;
+      if (url == null || SshHostDraft.validateWebSocketUrl(url) != null) {
+        throw ArgumentError('Invalid SSH WebSocket proxy URL');
+      }
+      if (kIsWeb && host.websocketHeaderNames.isNotEmpty) {
+        throw UnsupportedError(
+          'Browser WebSocket APIs cannot set HTTP upgrade headers. '
+          'Use the native app for Authorization/Cookie/X-* headers.',
+        );
+      }
+      final storedHeaders = await const SshWebSocketHeaderStore().read(host.id);
+      final headers = <String, String>{};
+      for (final name in host.websocketHeaderNames) {
+        if (SshHostDraft.validateHeaderName(name) != null ||
+            !storedHeaders.containsKey(name) ||
+            SshHostDraft.validateHeaderValue(storedHeaders[name]!) != null) {
+          throw StateError('Missing or invalid WebSocket header "$name". '
+              'Edit the SSH host under Settings → Connections.');
+        }
+        headers[name] = storedHeaders[name]!;
+      }
+      socket = await WebSocketSshSocket.connect(
+        url,
+        headers: headers,
+      );
+    } else {
+      socket = await SSHSocket.connect(
+        host.hostname,
+        host.port,
+        timeout: const Duration(seconds: 12),
+      );
+    }
     final client = SSHClient(
       socket,
       username: host.username,

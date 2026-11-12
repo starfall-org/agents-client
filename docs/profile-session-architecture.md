@@ -87,3 +87,16 @@ For OpenCode HTTP the app uses the server's documented REST API (no SSH or tmux)
 | Send prompt | `POST /session/:id/prompt_async` with text parts |
 
 API reference: https://opencode.ai/v1/docs/server/. OpenCode versions may change endpoint behavior; integration is implemented to the documented V1 REST API and needs real-server validation. The HTTP profile does not offer a raw SSH terminal, remote SFTP, or tmux management. For Flutter Web, the OpenCode server must explicitly permit the browser origin through CORS; mixed-content policy prevents an HTTPS web app from using plaintext remote HTTP.
+
+
+## SSH via WebSocket proxy (2026-11-13)
+
+In Settings > Connections > Add/Edit SSH host, select either Direct TCP or WebSocket proxy. A WebSocket SSH host retains the real SSH hostname, port and username for host-key verification, and adds a gateway URL such as wss://gateway.example.com/ssh. Remote gateways must use WSS; unencrypted WS is permitted only for loopback development.
+
+WebSocket headers: tap Add header to enter any name/value pairs (up to 32), including Authorization, Origin, Cookie, Cloudflare-Access-Client-Id, Cloudflare-Access-Client-Secret, User-Agent and X-* fields. Remove header rows individually. Protocol-managed fields (Connection, Upgrade, Host, Sec-WebSocket-*, Content-Length, Transfer-Encoding), duplicate names and header injection are rejected.
+
+The host metadata stores header names only; header values (which may contain bearer tokens) are saved in the native OS secure credential vault, not in SharedPreferences. Browser values are in memory only. Browser WebSocket APIs cannot send custom handshake headers, so use the native app for header-protected gateways, or a gateway-supported browser auth design. Browser WebSockets without custom headers are supported; direct browser TCP SSH is not.
+
+The bridge must forward raw SSH byte streams in BINARY WebSocket frames, rather than messages, base64, JSON or a shell. SSH authentication and SSH host-key pinning are still performed by the client and are not replaced by proxy TLS authentication. Avoid exposing an unauthenticated arbitrary SSH TCP gateway.
+
+Local automated tests cover binary byte roundtrips and custom Authorization headers. The feature is not yet tested with a real user-supplied SSH WebSocket gateway.

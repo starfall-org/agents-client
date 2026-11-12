@@ -132,10 +132,14 @@ class _ConnectDialogState extends State<_ConnectDialog> {
                   ],
                 )
               else
-                const Text(
-                  'Browser-based SSH requires a separate trusted gateway. '
-                  'Credentials are never saved in web localStorage.',
-                  style: TextStyle(
+                Text(
+                  widget.host.usesWebSocket
+                      ? 'The browser connects through the configured WebSocket proxy. '
+                          'Browser handshake headers cannot be customized. '
+                          'SSH credentials are not saved in web localStorage.'
+                      : 'Direct SSH is unavailable in browsers. '
+                          'Configure a WebSocket proxy on this SSH host.',
+                  style: const TextStyle(
                       color: AppColors.yellow, fontSize: 11, height: 1.5),
                 ),
               const SizedBox(height: 13),

@@ -6,7 +6,9 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/runtime/remote_runtime.dart';
 import '../../../core/security/ssh_credential_store.dart';
+import '../../../core/security/ssh_websocket_header_store.dart';
 import 'dialogs/ssh_connect_dialog.dart';
+import 'dialogs/ssh_host_editor_dialog.dart';
 import '../../../shared/widgets/status_elements.dart';
 import '../../sessions/models/agent_session.dart';
 import '../../sessions/presentation/agent_visuals.dart';
@@ -103,11 +105,12 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _connect(SshHostDraft host) async {
-    if (kIsWeb) {
+    if (kIsWeb && !host.usesWebSocket) {
       ShadSonner.of(context).show(const ShadToast(
-        title: Text('Direct SSH needs the native app'),
-        description: Text('Browsers require a trusted SSH WebSocket gateway. '
-            'This preview never sends credentials.'),
+        title: Text('Direct SSH requires a native app'),
+        description: Text('On web, set transport to WebSocket proxy '
+            'under Settings → Connections. Browser WebSockets cannot send '
+            'custom HTTP upgrade headers.'),
       ));
       return;
     }
@@ -207,22 +210,34 @@ class _SettingsPageState extends State<SettingsPage> {
     if (allowed != true || !mounted) return;
     await widget.runtime.disconnect(host.id);
     await const SshCredentialStore().delete(host.id);
+    await const SshWebSocketHeaderStore().delete(host.id);
     update(() => settings.hosts.removeWhere((item) => item.id == host.id));
   }
 
   Future<void> editHost([SshHostDraft? existing]) async {
-    final result = await showShadDialog<SshHostDraft>(
-      context: context,
-      builder: (_) => _SshHostDialog(existing: existing),
-    );
+    final result = await showSshHostEditor(context, existing: existing);
     if (!mounted || result == null) return;
-    if (existing != null) await widget.runtime.disconnect(existing.id);
-    update(() {
-      if (existing != null) settings.hosts.remove(existing);
-      settings.hosts.add(result.withId(
-        existing?.id ?? DateTime.now().microsecondsSinceEpoch.toRadixString(36),
+    final id =
+        existing?.id ?? DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    try {
+      if (result.host.usesWebSocket) {
+        await const SshWebSocketHeaderStore().save(id, result.headers);
+      } else if (existing?.usesWebSocket == true) {
+        await const SshWebSocketHeaderStore().delete(id);
+      }
+      if (existing != null) await widget.runtime.disconnect(existing.id);
+      if (!mounted) return;
+      update(() {
+        if (existing != null) settings.hosts.remove(existing);
+        settings.hosts.add(result.host.withId(id));
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ShadSonner.of(context).show(ShadToast(
+        title: const Text('Could not save SSH host'),
+        description: Text(error.toString()),
       ));
-    });
+    }
   }
 
   Future<void> _editProfile([AgentProfile? existing]) async {
@@ -889,6 +904,35 @@ class _SettingsPageState extends State<SettingsPage> {
                         dot: false,
                       ),
                     ]),
+                    if (host.usesWebSocket) ...[
+                      const SizedBox(height: 12),
+                      Row(children: [
+                        const Icon(Icons.hub_outlined,
+                            size: 15, color: AppColors.blue),
+                        const SizedBox(width: 8),
+                        Expanded(
+                            child: Text(
+                          host.websocketUrl ?? '',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.soft,
+                            fontSize: 11,
+                          ),
+                        )),
+                      ]),
+                      if (host.websocketHeaderNames.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            '${host.websocketHeaderNames.length} custom HTTP header(s) · values protected',
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                    ],
                     if (detected[host.id] != null) ...[
                       const SizedBox(height: 13),
                       Wrap(
@@ -1230,111 +1274,5 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ]),
         ],
-      );
-}
-
-class _SshHostDialog extends StatefulWidget {
-  const _SshHostDialog({this.existing});
-  final SshHostDraft? existing;
-
-  @override
-  State<_SshHostDialog> createState() => _SshHostDialogState();
-}
-
-class _SshHostDialogState extends State<_SshHostDialog> {
-  late final TextEditingController name =
-      TextEditingController(text: widget.existing?.name ?? '');
-  late final TextEditingController hostname =
-      TextEditingController(text: widget.existing?.hostname ?? '');
-  late final TextEditingController username =
-      TextEditingController(text: widget.existing?.username ?? '');
-  late final TextEditingController port =
-      TextEditingController(text: (widget.existing?.port ?? 22).toString());
-  String? validationError;
-
-  @override
-  void dispose() {
-    name.dispose();
-    hostname.dispose();
-    username.dispose();
-    port.dispose();
-    super.dispose();
-  }
-
-  void submit() {
-    final parsedPort = int.tryParse(port.text.trim());
-    if (name.text.trim().isEmpty ||
-        hostname.text.trim().isEmpty ||
-        username.text.trim().isEmpty ||
-        parsedPort == null ||
-        parsedPort < 1 ||
-        parsedPort > 65535) {
-      setState(() => validationError =
-          'Enter a name, hostname, username and port (1–65535).');
-      return;
-    }
-
-    Navigator.pop(
-      context,
-      SshHostDraft(
-        name: name.text.trim(),
-        hostname: hostname.text.trim(),
-        username: username.text.trim(),
-        port: parsedPort,
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) => ShadDialog(
-        title: Text(widget.existing == null ? 'Add SSH host' : 'Edit SSH host'),
-        description:
-            const Text('Local preview only. No SSH connection will be made.'),
-        constraints: const BoxConstraints(maxWidth: 450),
-        child: SizedBox(
-          width: 390,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _field('DISPLAY NAME', name, 'My workstation'),
-              _field('HOSTNAME / IP', hostname, 'dev.example.com'),
-              _field('USERNAME', username, 'developer'),
-              _field('PORT', port, '22'),
-              if (validationError != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(validationError!,
-                      style: const TextStyle(
-                          color: AppColors.yellow, fontSize: 11)),
-                ),
-            ],
-          ),
-        ),
-        actions: [
-          ShadButton.outline(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ShadButton(
-            onPressed: submit,
-            child: const Text('Save host'),
-          ),
-        ],
-      );
-
-  Widget _field(String label, TextEditingController controller, String hint) =>
-      Padding(
-        padding: const EdgeInsets.only(bottom: 13),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SettingsSmallHeading(label),
-            const SizedBox(height: 7),
-            ShadInput(
-              controller: controller,
-              placeholder: Text(hint),
-            ),
-          ],
-        ),
       );
 }

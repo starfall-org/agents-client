@@ -126,3 +126,24 @@ Source of truth caveat: the reference serverside-generative agent_list enumerate
 - [x] Unit/widget tests cover conditional HTTP fields, API endpoints and Basic Auth, error handling, legacy serialization and selection-only dialog.
 - [ ] End-to-end test with an authenticated remote OpenCode instance and TLS/CORS configured.
 - [ ] Real-time OpenCode HTTP SSE events, permission requests and interruption flows.
+
+
+## SSH WebSocket proxy and custom headers (2026-11-13)
+
+- [x] Direct TCP and WebSocket proxy SSH transport options in Settings > Connections.
+- [x] WSS remote URL validation and local WS allowance; retain original SSH host-key verification.
+- [x] Dynamic arbitrary HTTP upgrade header editor (up to 32, add/remove, show/hide values).
+- [x] Persist only header names with host metadata; store values in OS vault on native or RAM on web.
+- [x] Native WebSocket connector forwards Authorization/Origin/Cookie/X-* and other permitted headers.
+- [x] Browser WebSockets are supported without custom headers; otherwise report platform limitation clearly.
+- [x] Raw SSH bytes are sent/received via binary WebSocket frames.
+- [x] Model tests, UI toggle test and binary WebSocket echo roundtrip test.
+- [ ] Validate with a real authenticated WebSocket-to-SSH gateway and real SSH daemon.
+
+## Android preview packaging (2026-11-13)
+
+- [x] Build release-mode APKs split by armeabi-v7a, arm64-v8a and x86_64.
+- [x] Verify app ID, ABI, version codes and APK Signature Scheme v2 signatures.
+- [x] Confirm 35/35 Flutter tests pass before packaging.
+- [x] Android build environment Gradle cache permissions repaired without modifying application Gradle configuration.
+- [ ] Configure a dedicated production signing key before any production release; current APKs use Flutter template debug signing and must be labeled preview/prerelease.
